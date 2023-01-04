@@ -2,12 +2,14 @@ use ptree::*;
 use clap::Parser;
 use glob::Pattern;
 use ptree::item::StringItem;
-use walkdir::WalkDir;
+use walkdir::{DirEntry, WalkDir};
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::Metadata;
 
+
+const DEFAULT_PATTERN: &str = "";
 
 /// A simple tree program clone.
 #[derive(Parser)]
@@ -16,12 +18,17 @@ use std::fs::Metadata;
 #[command(version = "0.0.1")]
 #[command(about = "A simple tree clone.", long_about = None)]
 struct Cli {
-    /// Name of the person to greet
+    /// Name of the person to greet.
     #[arg(short, long, default_value=".")]
     root_path: String,
 
+    /// a glob pattern to use for finding files.
     #[arg(short, long)]
-    pattern: Option<String>
+    pattern: Option<String>,
+
+    /// a glob pattern for excluding results.
+    #[arg(short, long)]
+    exclude: Option<String>
 }
 
 /// A container for File System items.
@@ -75,12 +82,14 @@ impl FsMapNode {
         if path.len() -1 == index {
             place.insert_child(item.clone());
         } else {
-            FsMapNode::_spelunker(
-                &mut place.contents.get_mut(path[index]).expect("Can't index to path"), //todo make better
-                path,
-                index + 1,
-                item
-            )
+            if let Some(mut map_elem) = place.contents.get_mut(path[index]) {
+                FsMapNode::_spelunker(
+                    &mut map_elem,
+                    path,
+                    index + 1,
+                    item
+                )
+            } // log orphaned files?
         }
     }
 
@@ -111,25 +120,22 @@ impl FsMapNode {
     }
 }
 
-fn is_match_or_parent(path: &str, matches: &Vec<String>) -> bool {
+fn is_match_or_parent(path: &str, matches: &Vec<&str>) -> bool {
     matches.iter().any(|i| i.contains(path))
 }
 
-fn find_matches(args: &Cli) -> Vec<String> {
-    let mut matched_files: Vec<String> = Vec::new();
+fn find_matches<'a>(args: &Cli, entries: &'a Vec<DirEntry>) -> Vec<&'a str> {
+    let mut matched_files: Vec<&str> = Vec::new();
 
-    if let Some(pattern) = &args.pattern {
+    let pattern = match &args.pattern {
+        Some(pattern) =>  Pattern::new(pattern),
+        _ => Pattern::new(DEFAULT_PATTERN)
+    }.unwrap(); // working default, otherwise error on invalid pattern.
 
-        let pattern = Pattern::new(&pattern).unwrap();
-        let walker = WalkDir::new(&args.root_path)
-            .into_iter()
-            .filter_map(|entry| entry.ok());
-
-        for item in walker {
-            let path = item.path().to_str().unwrap();
-            if pattern.matches(&path) {
-                matched_files.push(path.to_string());
-            }
+    for item in entries {
+        let path = item.path().to_str().unwrap();
+        if pattern.matches(&path) {
+            matched_files.push(path);
         }
     }
 
@@ -139,16 +145,20 @@ fn find_matches(args: &Cli) -> Vec<String> {
 fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
     // Parse cli args.
     let cli = Cli::parse();
-    let matched_files = find_matches(&cli);
 
-
-    // find all files on their relative paths.
-    let mut walker = WalkDir::new(&cli.root_path)
+    let entries: Vec<DirEntry> = WalkDir::new(&cli.root_path)
         .into_iter()
-        .filter_map(|entry| entry.ok());
+        .filter_map(|entry| entry.ok())
+        .collect();
+
+    // get match references.
+    let matched_files = find_matches(&cli, &entries);
+
+    // make vec iterator for easier index management.
+    let mut ok_dir_entries = entries.iter();
 
     // create the map's root.
-    let first = walker.next().expect("No files found!");
+    let first = ok_dir_entries.next().expect("No files found!");
     let entry_meta = first.metadata().unwrap();
     let root = FsItem{
         name: first.file_name()
@@ -160,14 +170,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
 
     let mut fs_root = FsMapNode::new(root);
 
-    // Create all the roots childern.
+    let exclusion = Pattern::new(
+        &cli.exclude.unwrap_or(DEFAULT_PATTERN.to_string())
+    );
 
-    while let Some(entry) = walker.next() {
+    // Create all the roots children.
+    while let Some(entry) = ok_dir_entries.next() {
         let entry_meta: Metadata = entry.metadata().unwrap();
         let path = entry.path().to_str().unwrap();
 
+        // if we have a search pattern but it doesn't match:
         if !matched_files.is_empty() && !is_match_or_parent(path, &matched_files) {
             continue
+        }
+
+        // if it matches the exclusion pattern
+        if let Ok(ref exclusion_pattern) = exclusion {
+            if exclusion_pattern.matches(path) {
+                continue
+            }
         }
 
         let item =  FsItem{
