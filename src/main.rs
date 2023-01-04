@@ -115,17 +115,13 @@ fn is_match_or_parent(path: &str, matches: &Vec<String>) -> bool {
     matches.iter().any(|i| i.contains(path))
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
-    // Parse cli args.
-    let cli = Cli::parse();
-
-
-
+fn find_matches(args: &Cli) -> Vec<String> {
     let mut matched_files: Vec<String> = Vec::new();
-    if let Some(pattern) = cli.pattern {
+
+    if let Some(pattern) = &args.pattern {
 
         let pattern = Pattern::new(&pattern).unwrap();
-        let walker = WalkDir::new(&cli.root_path)
+        let walker = WalkDir::new(&args.root_path)
             .into_iter()
             .filter_map(|entry| entry.ok());
 
@@ -137,13 +133,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
         }
     }
 
+    matched_files
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
+    // Parse cli args.
+    let cli = Cli::parse();
+    let matched_files = find_matches(&cli);
+
 
     // find all files on their relative paths.
     let mut walker = WalkDir::new(&cli.root_path)
         .into_iter()
         .filter_map(|entry| entry.ok());
-
-    println!("matched files = {:?}", matched_files);
 
     // create the map's root.
     let first = walker.next().expect("No files found!");
