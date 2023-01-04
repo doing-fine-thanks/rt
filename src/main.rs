@@ -18,7 +18,7 @@ const DEFAULT_PATTERN: &str = "";
 #[command(version = "0.0.1")]
 #[command(about = "A simple tree clone.", long_about = None)]
 struct Cli {
-    /// Name of the person to greet.
+    /// The root of the directory tree to display.
     #[arg(short, long, default_value=".")]
     root_path: String,
 
