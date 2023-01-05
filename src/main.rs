@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::fs::Metadata;
 
-
+/// For globs
 const DEFAULT_PATTERN: &str = "";
 
 /// A simple tree program clone.
@@ -120,17 +120,18 @@ impl FsMapNode {
     }
 }
 
+/// Checks to see if a path is in a list of paths or a sub path.
+/// Technically would produce a false positive if the subpath
+/// started after the root dir (ie '/src/t/e'.contians('t/e') -> true).
+/// but I dont feel like fixing that right now.
 fn is_match_or_parent(path: &str, matches: &Vec<&str>) -> bool {
     matches.iter().any(|i| i.contains(path))
 }
 
-fn find_matches<'a>(args: &Cli, entries: &'a Vec<DirEntry>) -> Vec<&'a str> {
+/// Takes a pattern and list of DirEntrys' and returns
+/// the set of paths in those entries that match the pattern.
+fn find_matches<'a>(pattern: &Pattern, entries: &'a Vec<DirEntry>) -> Vec<&'a str> {
     let mut matched_files: Vec<&str> = Vec::new();
-
-    let pattern = match &args.pattern {
-        Some(pattern) =>  Pattern::new(pattern),
-        _ => Pattern::new(DEFAULT_PATTERN)
-    }.unwrap(); // working default, otherwise error on invalid pattern.
 
     for item in entries {
         let path = item.path().to_str().unwrap();
@@ -142,9 +143,22 @@ fn find_matches<'a>(args: &Cli, entries: &'a Vec<DirEntry>) -> Vec<&'a str> {
     matched_files
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
+
+fn main() -> Result<(), Box<dyn std::error::Error>>{
     // Parse cli args.
     let cli = Cli::parse();
+
+    // set up patterns.
+    let (match_pattern, find_specific_pattern) = match cli.pattern {
+        Some(pattern) => (Pattern::new(&pattern)?, true),
+        _ => (Pattern::new(DEFAULT_PATTERN)?, false)
+    };
+
+    let (exclude_pattern, exclude_specific_pattern) = match cli.exclude {
+        Some(exclude) => (Pattern::new(&exclude)?, true),
+        _ => (Pattern::new(DEFAULT_PATTERN)?, false)
+    };
+
 
     let entries: Vec<DirEntry> = WalkDir::new(&cli.root_path)
         .into_iter()
@@ -152,14 +166,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
         .collect();
 
     // get match references.
-    let matched_files = find_matches(&cli, &entries);
+    let matched_files = if find_specific_pattern {
+        find_matches(&match_pattern, &entries)
+    } else {
+        Vec::new()
+    };
 
     // make vec iterator for easier index management.
-    let mut ok_dir_entries = entries.iter();
+    let mut dir_iter = entries.iter();
 
     // create the map's root.
-    let first = ok_dir_entries.next().expect("No files found!");
-    let entry_meta = first.metadata().unwrap();
+    let first = dir_iter.next().expect("No files found!");
+    let entry_meta = first.metadata().expect("Unable to parse metadata for files!");
+
     let root = FsItem{
         name: first.file_name()
             .to_os_string()
@@ -170,14 +189,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
 
     let mut fs_root = FsMapNode::new(root);
 
-    let exclusion = Pattern::new(
-        &cli.exclude.unwrap_or(DEFAULT_PATTERN.to_string())
-    );
-
     // Create all the roots children.
-    while let Some(entry) = ok_dir_entries.next() {
-        let entry_meta: Metadata = entry.metadata().unwrap();
-        let path = entry.path().to_str().unwrap();
+    while let Some(entry) = dir_iter.next() {
+
+        let entry_meta: Metadata = entry.metadata().expect("No files found!");
+        let path = entry.path().to_str().expect("Unable to parse metadata for files!");
 
         // if we have a search pattern but it doesn't match:
         if !matched_files.is_empty() && !is_match_or_parent(path, &matched_files) {
@@ -185,24 +201,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>>{ // figure out if better way
         }
 
         // if it matches the exclusion pattern
-        if let Ok(ref exclusion_pattern) = exclusion {
-            if exclusion_pattern.matches(path) {
-                continue
-            }
+        if exclude_specific_pattern && exclude_pattern.matches(path) {
+            continue
         }
 
-        let item =  FsItem{
-            name: entry.file_name()
-                .to_os_string()
-                .into_string()
-                .unwrap(),
-            metadata: entry_meta
-        };
-        fs_root.insert_at_path(path, item) ;
+        fs_root.insert_at_path(
+            path,
+            FsItem{
+                name: entry.file_name()
+                    .to_os_string()
+                    .into_string()
+                    .unwrap(),
+                metadata: entry_meta
+            }
+        ) ;
     };
 
     // Display the tree.
     fs_root.display_tree();
     Ok(())
-
 }
